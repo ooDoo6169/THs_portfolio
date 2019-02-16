@@ -1,0 +1,697 @@
+---
+title: 'Kobe Bryant Shot Selection'
+author: "ooDoo"
+date: "2017년 2월 16일"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# basic package
+library(ggplot2)
+library(ggthemr)
+library(dplyr)
+library(data.table)
+library(lubridate)
+library(readr)
+
+#setwd
+knitr::opts_knit$set(root.dir = "C:/Users/LG/Desktop/R/3. DATA/DATA_ML/Kobe")
+```
+
+
+#1. DATA IMPORT
+```{r}
+Kobe <- read_csv("data.csv")
+head(Kobe)
+summary(Kobe)
+```
+
+##1-1) DATA SPLIT BY train_kobe & test_kobe
+```{r}
+train_kobe <- Kobe[!is.na(Kobe$shot_made_flag), ]
+test_kobe <- Kobe[is.na(Kobe$shot_made_flag), ]
+```
+
+
+
+#2. DATA EXPLORATION
+##2-1) COLUM EXPLANATION
+```{r}
+names(train_kobe)
+# shot type
+sort(unique(train_kobe$action_type)) #55EA
+unique(train_kobe$combined_shot_type) # 6EA
+# remain time
+unique(train_kobe$minutes_remaining) # left seconds before to finish quater
+unique(train_kobe$seconds_remaining) # left seconds before to finish quater
+# shot distance and area zone
+unique(train_kobe$shot_distance) 
+unique(train_kobe$shot_zone_range)
+unique(train_kobe$shot_zone_area) # divide floor to 6th zone.
+unique(train_kobe$shot_zone_basic) 
+
+# stadium location
+"unique(train_kobe$lat)"
+"unique(train_kobe$lon)"
+# court location
+"unique(train_kobe$loc_x)"
+"unique(train_kobe$loc_y)"
+# LA lakers
+unique(train_kobe$team_id)
+unique(train_kobe$team_name)
+head(unique(train_kobe$game_date))
+# playoffs
+unique(train_kobe$playoffs) # dummy
+# etc
+unique(train_kobe$period) # quater
+unique(train_kobe$season) 
+```
+##
+
+##2-2) VISUALIZATION 
+###(0) Made ~ combined_shot_type
+```{r}
+
+train_kobe%>%
+    dplyr::select(shot_made_flag, combined_shot_type)%>%
+    group_by(combined_shot_type, shot_made_flag) %>%
+    summarise(Full_Count = n()) %>%
+    arrange(combined_shot_type) %>%
+    mutate(Shot_pct = round(Full_Count/sum(Full_Count), digits=3)) %>%
+    filter(shot_made_flag == 1) %>%
+    ggplot(aes(x = combined_shot_type, y = Shot_pct, fill = combined_shot_type)) +
+    geom_col() +
+    geom_text(aes(label = Shot_pct),size=4) 
+
+```
+
+###(1) Dunk & No Dunk
+```{r}
+## Dunk
+train_kobe%>%
+    filter(combined_shot_type == "Dunk")%>%
+    group_by(action_type, shot_made_flag)%>%
+    summarise(count = n()) %>%
+    mutate(made = (shot_made_flag * count)/sum(count)) %>%
+    filter(shot_made_flag == 1) %>%
+    ggplot(aes(x = action_type, y = made, fill = action_type)) +
+    geom_col() +
+    theme(axis.text.x = element_text(angle = 45, face = "italic", vjust = 1 ,hjust = 1))
+## No-Dunk
+train_kobe%>%
+    filter(combined_shot_type != "Dunk")%>%
+    group_by(combined_shot_type, shot_made_flag)%>%
+    summarise(count = n()) %>%
+    mutate(made = (shot_made_flag * count)/sum(count)) %>%
+    filter(shot_made_flag == 1) %>%
+    ggplot(aes(x = combined_shot_type, y = made, fill = combined_shot_type)) +
+    geom_col()
+```
+*Divide data as Dunk and No-Dunk*
+###
+
+   
+###(2) Distance~combined_shot_type
+```{r}
+for(i in 1:6 ){
+    train_kobe%>%
+    filter(combined_shot_type == unique(train_kobe$combined_shot_type)[i]) %>%
+    group_by(shot_distance, combined_shot_type, shot_made_flag) %>%
+    summarise(count = n())%>%
+    mutate(made = (shot_made_flag * count)/sum(count))%>%
+    filter(shot_made_flag == 1) %>%
+    ggplot(aes(x = shot_distance, y = made)) +
+    geom_col(fill = "steelblue") +
+    ggtitle(unique(train_kobe$combined_shot_type)[i]) +
+    theme(plot.title = element_text(hjust = 0.5))-> k
+    assign(paste0("VIS_",i), k)
+}
+library(gridExtra)
+grid.arrange(VIS_1,VIS_2,VIS_3,VIS_4,VIS_5,VIS_6, ncol = 3)
+```
+*Divide distance !*
+"0~2 # dunk and layup
+3~5 # all
+7~  # shot"
+###
+
+
+###(3) Range~combined_shot_type
+```{r}
+for(i in 1:6 ){
+    train_kobe%>%
+    filter(combined_shot_type == unique(train_kobe$combined_shot_type)[i]) %>%
+    group_by(shot_zone_range, combined_shot_type, shot_made_flag) %>%
+    summarise(count = n())%>%
+    mutate(made = (shot_made_flag * count)/sum(count))%>%
+    filter(shot_made_flag == 1) %>%
+    ggplot(aes(x = shot_zone_range, y = made)) +
+    geom_col(fill = "steelblue") +
+    ggtitle(unique(train_kobe$combined_shot_type)[i]) +
+    theme(axis.text.x = element_text(angle = 45, face = "italic", vjust = 1 ,hjust = 1),  
+          plot.title = element_text(hjust = 0.5)) -> k
+    assign(paste0("VIS_",i), k)
+}
+grid.arrange(VIS_1,VIS_2,VIS_3, ncol = 3)  
+grid.arrange(VIS_4,VIS_5,VIS_6, ncol = 3)
+```
+###
+
+###(4) shot_zone_area ~ shot_type
+```{r}
+for(i in 1:6 ){
+    train_kobe%>%
+    filter(combined_shot_type == unique(train_kobe$combined_shot_type)[i]) %>%
+    group_by(shot_zone_area, combined_shot_type, shot_made_flag) %>%
+    summarise(count = n())%>%
+    mutate(made = (shot_made_flag * count)/sum(count))%>%
+    filter(shot_made_flag == 1) %>%
+    ggplot(aes(x = shot_zone_area, y = made, fill = shot_zone_area)) +
+    geom_col() +
+    ggtitle(unique(train_kobe$combined_shot_type)[i]) +
+    theme(axis.text.x = element_text(angle = 45, face = "italic", vjust = 1 ,hjust = 1), 
+          plot.title = element_text(hjust = 0.5)) +
+    guides(fill=FALSE) -> k
+    
+    assign(paste0("VIS_",i), k)
+}
+grid.arrange(VIS_1,VIS_2,VIS_3, ncol = 3)  
+grid.arrange(VIS_4,VIS_5,VIS_6, ncol = 3)
+```
+###
+
+###(5) period ~ shot made
+```{r}
+train_kobe%>%
+    filter(playoffs == 1)%>%
+    group_by(period, shot_made_flag)%>%
+    summarise(made = n())%>%
+    mutate(full_count = sum(made), prop = made/full_count)%>%
+    filter(shot_made_flag == 1)%>%
+    ggplot(aes(x = period, y = prop)) +
+    geom_col(fill = "hotpink") +
+    ggtitle("Playoff") + 
+    theme(plot.title = element_text(hjust = 0.5)) -> g1
+train_kobe%>%
+    filter(playoffs == 0)%>%
+    group_by(period, shot_made_flag)%>%
+    summarise(made = n())%>%
+    mutate(full_count = sum(made), prop = made/full_count)%>%
+    filter(shot_made_flag == 1)%>%
+    ggplot(aes(x = period, y = prop)) +
+    geom_col(fill = "deepskyblue") +
+    ggtitle("Season") +
+    theme(plot.title = element_text(hjust = 0.5)) -> g2
+grid.arrange(g1,g2, ncol = 2)
+```
+###
+
+###(6) time_remaining ~ made
+```{r}
+train_kobe%>%
+    group_by(seconds_remaining, shot_made_flag)%>%
+    summarise(made = n())%>%
+    mutate(full_count = sum(made), prop = made/full_count)%>%
+    filter(shot_made_flag == 1)%>%
+    ggplot(aes(x = seconds_remaining, y = prop)) +
+    geom_col(fill = "hotpink") +
+    ggtitle("Seconds_remaining") +
+    theme(plot.title = element_text(hjust = 0.5)) -> g1
+train_kobe%>%
+    group_by(minutes_remaining, shot_made_flag)%>%
+    summarise(made = n())%>%
+    mutate(full_count = sum(made), prop = made/full_count)%>%
+    filter(shot_made_flag == 1)%>%
+    ggplot(aes(x = minutes_remaining, y = prop)) +
+    geom_col(fill = "deepskyblue") +
+    ggtitle("Minutes_remaining") +
+    theme(plot.title = element_text(hjust = 0.5)) -> g2
+grid.arrange(g1,g2,ncol = 2)
+```
+###
+
+
+###(7) season~made & throw
+```{r}
+train_kobe%>%
+    group_by(season, shot_made_flag)%>%
+    summarise(made = n()) %>%
+    mutate(full_count = sum(made), prop = made/full_count)%>%
+    filter(shot_made_flag == 1) %>%
+    ggplot(aes(x = season, y = full_count, fill = prop)) +
+    geom_col() +
+    scale_fill_gradient(low="firebrick1", high="deepskyblue") +
+    theme(axis.text.x = element_text(angle = 45)) 
+```
+###
+
+
+###(8) Court _ source[How to create NBA shot charts in R]
+```{r}
+# basic Chart
+for(i in 1:length(unique(train_kobe$season))){
+    train_kobe%>%
+        filter(loc_y <= 400) %>%
+        filter(season == unique(train_kobe$season)[i]) %>%
+        ggplot(aes(x = loc_x, y = loc_y)) +
+        geom_point(aes(colour = factor(shot_made_flag))) +
+        ggtitle(paste0("season",i,"_shot distribution")) +
+        theme(legend.title=element_blank())-> k
+    
+    assign(paste0("VIS_",i), k)
+}
+grid.arrange(VIS_1,VIS_2,VIS_3,VIS_4, ncol = 2)
+grid.arrange(VIS_17,VIS_18,VIS_19,VIS_20, ncol = 2)
+```
+
+```{r}
+# Shot Charts
+library(grid)
+library(jpeg)
+# half court image 
+court <- rasterGrob(readJPEG("nba_court.jpg"),width=unit(1,"npc"),height=unit(1,"npc"))
+# plot using NBA court background and colour by shot zone 
+for(i in 1:length(unique(train_kobe$season))){
+    train_kobe%>%
+        filter(season == unique(train_kobe$season)[i],
+               loc_y <= 400 ) %>%
+        ggplot(aes(x = loc_x, y = loc_y)) +
+        annotation_custom(court, -250,250,-50,420) +
+        geom_point(aes(colour = shot_zone_basic, shape = factor(shot_made_flag)), alpha = 0.8 ) +
+        xlim(250, -250) + ylim(-50, 420) +
+        geom_rug(alpha = 0.2) + # to see the density
+        coord_fixed() +   # coordinate the court.  
+        ggtitle(paste0("season",i,"_shot distribution")) +
+        theme(line = element_blank(), plot.title = element_text(hjust = 0.5),
+             axis.title.x = element_blank(), axis.title.y = element_blank(),
+             axis.text.x = element_blank(), axis.text.y = element_blank()) -> k
+    assign(paste0("VIS_",i), k)
+}
+VIS_14
+VIS_18
+VIS_20
+```
+
+```{r}
+train_kobe%>%
+    filter(loc_y >= 400) %>%
+    group_by(shot_made_flag)%>%
+    summarise(count = n())
+```
+*remove outlier shot which over 400 loc y *
+
+```{r}
+for(i in 1:length(unique(train_kobe$season))){
+    train_kobe%>%
+        filter(season == unique(train_kobe$season)[i],
+               loc_y <= 400 ) %>%
+        ggplot(aes(x = loc_x, y = loc_y)) +
+        annotation_custom(court, -250,250,-50,420) +
+        geom_point(aes(colour = factor(shot_made_flag)), alpha = 0.8 ) +
+        xlim(250, -250) + ylim(-50, 420) +
+        geom_rug(alpha = 0.2) + # to see the density
+        coord_fixed() +  # coordinate the court.
+        ggtitle(paste0("season",i,"_shot distribution")) +
+        theme(line = element_blank(), plot.title = element_text(hjust = 0.5),
+             axis.title.x = element_blank(), axis.title.y = element_blank(),
+             axis.text.x = element_blank(), axis.text.y = element_blank()) -> k
+    
+    assign(paste0("VIS_",i), k)
+}
+VIS_14
+VIS_18
+VIS_20
+```
+###
+##
+#
+
+
+#3. FEATURE HANDLING
+##3-1)FEATURE EXTRACT
+```{r}
+names(train_kobe)
+```
+
+```{r}
+EAST <- c("BKN", "BOS", "ATL", "ORL", "WAS", "CHA", "NYK", "CLE", "DET", "CHI", "TOR", "IND", "MIL", "PHI", "MIA")
+```
+```{r}
+FeatureExtract <- function(data){
+    data%>%
+        # FACTOR
+        mutate(season = factor(season),
+               shot_type = factor(shot_type),
+               action_type = factor(action_type),
+               combined_shot_type = factor(combined_shot_type),
+               shot_zone_area = factor(shot_zone_area),
+               shot_zone_basic = factor(shot_zone_basic),
+               shot_zone_basic = factor(shot_zone_range))%>%
+               
+        # month & season_divide
+        mutate(month = month(game_date),
+               season_divide = ifelse(month == 10 | month == 11 | month == 12, "season_early",
+                                    ifelse(month == 1 | month == 2 | month == 3,"season_mid",
+                                        ifelse(month == 4 | month == 5 | month == 6,  "season_late", NA)))) %>%
+        
+        # time, clutch, slump_season
+        mutate(time = (minutes_remaining * 60 + seconds_remaining),
+               clutch = ifelse(time <= 5 & period >=4, 1, 0), 
+               slump_season = ifelse(season == "2013-14" , 1, 
+                                ifelse(season == "2014-15", 1,
+                                    ifelse(season == "2015-16" , 1, 0)))) %>%
+        
+        # Conference & Division
+        #mutate(opponent = as.character(opponent)) %>%
+        #mutate_each(funs(conference = if_else(opponent%in% EAST == TRUE, 0, 1)), opponent) %>%
+        
+        # DELETE UNNECESSARY COLUMS
+        dplyr::select(-c(game_event_id, game_id, lat, lon, team_name, team_id, game_date, minutes_remaining, seconds_remaining, shot_id))
+}
+```
+
+```{r}
+# Apply FeatureExtract
+train_kobe_N <- FeatureExtract(train_kobe) 
+test_kobe_N <- FeatureExtract(test_kobe) #test_kobe_N's nrow  4,989
+```
+
+```{r}
+#  home_away
+splitString <- function(data){
+    strsplit(data, split = "[@]")[[1]][2]
+}
+    train_kobe_N$matchup <- as.character(train_kobe_N$matchup)
+    train_kobe_N$home_away <- sapply(train_kobe_N$matchup, FUN = splitString)
+    train_kobe_N$home_away <- ifelse(is.na(train_kobe_N$home_away) == TRUE, 1, 0)
+    train_kobe_N$matchup <- NULL
+    
+    test_kobe_N$matchup <- as.character(test_kobe_N$matchup)
+    test_kobe_N$home_away <- sapply(test_kobe_N$matchup, FUN = splitString)
+    test_kobe_N$home_away <- ifelse(is.na(test_kobe_N$home_away) == TRUE, 1, 0)
+    test_kobe_N$matchup <- NULL
+```
+
+##3-2) OUTLIER DELETE
+```{r}
+#train_kobe_N%>%
+#    filter(loc_y <= 400) -> train_kobe_N
+# Be cautious to Do not apply to test data! 
+```
+
+
+
+#4.FEATURE SELECT[boruta]
+##4-1) BORUTA
+*[Boruta]function : Boruta(data, target value, maxRuns = n)*
+```{r}
+names(train_kobe_N)
+```
+
+```{r}
+library(Boruta)
+set.seed(123)
+bor.result <- Boruta(train_kobe_N[,-9], train_kobe_N[,9], maxRuns = 11)
+```
+##
+
+##4-2) RESULT 
+```{r}
+# resulst
+bor.result
+bor.result$finalDecision
+head(bor.result$ImpHistory)
+```
+
+##4-3) VIS IMPORTANCE FEATURE
+```{r}
+# basic plot using [plot]
+plot(bor.result)
+# custom plot using [ggplot] 
+library(reshape2)
+data.frame(bor.result$ImpHistory)%>%
+    melt(variable.name = "Feature" ,value.name = "importance") %>%
+    group_by(Feature) %>%
+    mutate(Feature_mean = mean(importance)) %>%
+    arrange(Feature_mean) %>%
+    ungroup(Feature) %>%
+    mutate(Feature = as.vector(Feature)) %>%
+    mutate(Feature = factor(Feature, levels=unique(Feature))) %>%
+    mutate(level = ifelse(Feature_mean > 4.9, "Good", 
+                        ifelse(Feature_mean < 4.8 & Feature_mean > 2, "Not good",
+                            ifelse(Feature_mean <2, "Bad", NA)))) %>%
+    ggplot(aes(x = Feature, y = importance, fill = factor(level))) +
+    geom_boxplot() +
+    theme(axis.text.x = element_text(angle = 55, hjust=1, vjust=1)) +
+    scale_fill_discrete(breaks=c("Good","Not good","Bad"))
+```
+#
+
+
+#5. ONE-HOT ENCODING
+##5-1) MATRIX [ORIGINAL DATA]
+```{r}
+# data
+train_kobe_mat <- model.matrix(shot_made_flag ~ 0 + . , train_kobe_N)[, -1]
+head(train_kobe_mat)
+test_kobe_N <- dplyr::select(test_kobe_N, -shot_made_flag)
+test_kobe_mat <- model.matrix( ~ 0 + . , test_kobe_N)[, -1] # i don't know why but, when if i don't delete NA column, it make list not matirx
+# label
+train_kobe_label <- train_kobe_N[,"shot_made_flag"]
+```
+##
+#
+
+#6. XGB
+##6-1) PARAMETER SEARCHING
+```{r}
+library(xgboost)
+params <- list(eta = 0.05,
+               max.depth = 5,
+               gamma = 0,
+               colsample_bytree = 1,
+               subsample = 1,
+               objective = "binary:logistic",
+               eval_metric = "logloss")
+```
+
+##6-2) RUN Cross Validation 
+```{r}
+set.seed(1234)
+xgbcv <- xgb.cv(params = params,
+                nrounds = 200,
+                nfold = 10,
+                metrics = "logloss",
+                data = train_kobe_mat,
+                label = train_kobe_label,  
+                verbose = 0)
+```
+
+##6-3) CHECK BEST ITER VALUE
+```{r}
+xgb.best <- arrange(xgbcv$evaluation_log, test_logloss_mean)[1, ] 
+xgb.best
+```
+    
+##6-4) REMODELING
+```{r}
+kobe_xgboost <- xgboost(param =params,
+                        data = train_kobe_mat,
+                        label = train_kobe_label,
+                        nrounds = xgb.best$iter,
+                        verbose = 1
+                        )
+```
+
+```{r}
+kobe_xgb_pred <- predict(kobe_xgboost, test_kobe_mat)
+```
+
+##6-5) SUBMISSION
+```{r}
+submission <- data.frame(shot_id = test_kobe$shot_id,
+                         shot_made_flag = kobe_xgb_pred)
+write.csv(submission, "C:/Users/LG/Desktop/kobe_xgb_ooDoo_5.csv" , row.names = FALSE)
+```
+
+
+
+#7. Dunk & No-Dunk
+##7-1) DATA SPLIT BY Dunk & No-Dunk 
+```{r}
+train_kobe_N%>%
+    filter(combined_shot_type == "Dunk") -> train_kobe_Dunk 
+train_kobe_N%>%
+    filter(combined_shot_type != "Dunk") -> train_kobe_No_Dunk 
+
+test_kobe_N%>%
+    filter(combined_shot_type == "Dunk") -> test_kobe_Dunk 
+test_kobe_N%>%
+    filter(combined_shot_type != "Dunk") -> test_kobe_No_Dunk 
+
+# for shot_id
+test_kobe%>%
+    filter(combined_shot_type == "Dunk")%>%
+    dplyr::select(shot_id) -> test_kobe_Dunk_shotId
+test_kobe%>%
+    filter(combined_shot_type != "Dunk")%>%
+    dplyr::select(shot_id) -> test_kobe_No_Dunk_shotId
+```
+
+##7-2) ONE-HOT ENCODING
+```{r}
+# matrix
+train_kobe_Dunk_mat <- model.matrix(shot_made_flag ~ 0 + . , train_kobe_Dunk )[, -1]
+train_kobe_No_Dunk_mat <- model.matrix(shot_made_flag ~ 0 + . , train_kobe_No_Dunk )[, -1]
+
+test_kobe_Dunk_mat <- model.matrix( ~ 0 + . , test_kobe_Dunk)[, -1]
+test_kobe_No_Dunk_mat <- model.matrix( ~ 0 + . , test_kobe_No_Dunk)[, -1] 
+
+# label
+train_kobe_Dunk_label <- train_kobe_Dunk[,"shot_made_flag"]
+train_kobe_No_Dunk_label <- train_kobe_No_Dunk[,"shot_made_flag"]
+```
+##
+
+##7-3) XGB
+###(1) Dunk
+```{r}
+###(1) PARAMETER SEARCHING
+params <- list(eta = 0.05,
+               max.depth = 5,
+               gamma = 0,
+               colsample_bytree = 1,
+               subsample = 1,
+               objective = "binary:logistic",
+               eval_metric = "logloss")
+
+###(2) RUN Cross Validation 
+set.seed(1234)
+xgbcv <- xgb.cv(params = params,
+                nrounds = 200,
+                nfold = 10,
+                metrics = "logloss",
+                data = train_kobe_Dunk_mat,
+                label = train_kobe_Dunk_label,  
+                verbose = 0)  #alpha = like lasso, it will remove unnecessary column
+
+###(3) CHECK BEST ITER VALUE
+xgb.best <- arrange(xgbcv$evaluation_log, test_logloss_mean)[1, ] 
+xgb.best
+
+###(4) REMODELING
+kobe_xgboost <- xgboost(param =params,
+                        data = train_kobe_Dunk_mat,
+                        label = train_kobe_Dunk_label,
+                        nrounds = xgb.best$iter,
+                        verbose = 1
+                        )
+###(5) PREDICT
+kobe_xgb_pred_Dunk <- predict(kobe_xgboost, test_kobe_Dunk_mat)
+kobe_xgb_pred_Dunk_DF <- data.frame(shot_id = test_kobe_Dunk_shotId$shot_id,
+                                    shot_made_flag = kobe_xgb_pred_Dunk)
+```
+
+###(2) No-Dunk
+```{r}
+###(1) PARAMETER SEARCHING
+params <- list(eta = 0.05,
+               max.depth = 5,
+               gamma = 0,
+               colsample_bytree = 1,
+               subsample = 1,
+               objective = "binary:logistic",
+               eval_metric = "logloss")
+
+###(2) RUN Cross Validation 
+set.seed(1234)
+xgbcv <- xgb.cv(params = params,
+                nrounds = 200,
+                nfold = 10,
+                metrics = "logloss",
+                data = train_kobe_No_Dunk_mat,
+                label = train_kobe_No_Dunk_label,  
+                verbose = 0)
+
+###(3) CHECK BEST ITER VALUE
+xgb.best <- arrange(xgbcv$evaluation_log, test_logloss_mean)[1, ] 
+xgb.best
+
+###(4) REMODELING
+kobe_xgboost <- xgboost(param =params,
+                        data = train_kobe_No_Dunk_mat,
+                        label = train_kobe_No_Dunk_label,
+                        nrounds = xgb.best$iter,
+                        verbose = 1
+                        )
+###(5) PREDICT
+kobe_xgb_pred_No_Dunk <- predict(kobe_xgboost, test_kobe_No_Dunk_mat)
+kobe_xgb_pred_No_Dunk_DF <- data.frame(shot_id = test_kobe_No_Dunk_shotId$shot_id,
+                                       shot_made_flag = kobe_xgb_pred_No_Dunk)
+
+```
+
+###(3)rbind Dunk and No Dunk
+```{r}
+submission_Dunk_NoDunk <- rbind(kobe_xgb_pred_Dunk_DF, kobe_xgb_pred_No_Dunk_DF)
+submission_Dunk_NoDunk%>%
+    arrange(shot_id) -> submission_Dunk_NoDunk
+
+write.csv(submission_Dunk_NoDunk, "C:/Users/LG/Desktop/kobe_xgb_ooDoo_DND_6.csv" , row.names = FALSE)
+```
+
+
+
+#8. Logistic
+##8-1) SET LOGIT MODEL
+```{r}
+#  motion_type
+splitString <- function(x){
+    strsplit(x, split = '[ ]')[[1]][1]
+}
+    train_kobe_N$action_type <- as.character(train_kobe_N$action_type)
+    train_kobe_N$motion_type <- sapply(train_kobe_N$action_type, FUN = splitString)
+    train_kobe_N$action_type <- as.factor(train_kobe_N$action_type)
+
+    test_kobe_N$action_type <- as.character(test_kobe_N$action_type)
+    test_kobe_N$motion_type <- sapply(test_kobe_N$action_type, FUN = splitString)
+    test_kobe_N$action_type <- as.factor(test_kobe_N$action_type)
+```
+
+
+```{r}
+kobe_logit <- glm(shot_made_flag~ combined_shot_type + loc_x + loc_y + period + playoffs + season + shot_distance + shot_type + shot_zone_area + shot_zone_basic + shot_zone_range + opponent + home_away + motion_type, data = train_kobe_N, family = "binomial")
+# use motion_type varibale instead action_type, since test's action_type has no some index 
+```
+
+##8-2) PREDICT
+```{r}
+kobe_logit_pred <- predict(kobe_logit, test_kobe_N, type = "response") # [type = "response"] for prop value
+submission <- data.frame(shot_id = test_kobe$shot_id,
+                         shot_made_flag = kobe_logit_pred)
+write.csv(submission, "C:/Users/LG/Desktop/kobe_logit_ooDoo_1.csv" , row.names = FALSE)
+```
+
+
+
+
+
+
+#9. RESULT VIS
+```{r}
+RESULT_DF <- data.frame(file_name = c("kobe_xgb_ooDoo_1", "kobe_xgb_ooDoo_2","kobe_xgb_ooDoo_3", "kobe_xgb_ooDoo_DND", "kobe_xgb_ooDoo_DND_2", "kobe_xgb_ooDoo_DND_3", "kobe_logit_ooDoo_1" ),
+                        file_describe = c("XGB_Vanila", "NoOpponent", "parameter_change", "D_ND", "D_ND_2",  "D_ND_3", "logit_vanila" ),
+                        eta = c(0.3, 0.3, 0.05, 0.3, 0.05, 0.05, 0),
+                        iter = c(30, 32, 192, 32, 198, 271, 0),
+                        logloss = c(0.60481, 0.60634, 0.60427, 0.60537, 0.60407, 0.60497, 0.61379)
+             )
+RESULT_DF%>%
+    ggplot(aes(x = file_describe, y = logloss, color = factor(iter), shape = factor(eta))) +
+    geom_line(group = 1, color = "black", alpha = 0.5) +
+    geom_point(size = 3) +
+    geom_vline(xintercept = 2, linetype = "dashed", alpha = 0.5 ) +
+    theme(axis.text.x = element_text(angle = 45, face = "italic", vjust = 1 ,hjust = 1))
+
+```
