@@ -1,0 +1,540 @@
+---
+title: "Bike Sharing Demand"
+subtitle: "[R_ML]161203_AR과제_DAY_6"
+author: "ooDoo"
+date: "2016년 12월 8일"
+output: html_document
+---
+
+# 0. R_basic setting
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Sys.setlocale("LC_ALL", "English_United States.1252") # for 한글 지원
+library(ggthemr) 
+library(extrafont)
+library(glmnet)
+library(dplyr)
+library(plotly)
+library(reshape2)
+
+library(corrplot) 
+library(randomForest)
+library(lubridate)
+library(ggthemr)
+library(ggplot2)
+library(ROCR)
+library(readr)  # [read_csv]패키지: 데이터 처리 속도 증가 및 lubridate기능 내장되있음 
+
+#ggthemr("sky", layout = "clean")
+
+knitr::opts_knit$set(root.dir = "C:/Users/TaeHwan/Desktop/0. R/1. ML/2) Study Material/Day6/Assignment3_Bike/Bike")
+```
+
+
+#1. Data Import
+```{r}
+train <- read_csv("train.csv")
+test <- read_csv("test.csv")
+head(train)
+head(test)
+str(train)
+```
+
+- datetime : date and time
+- season : season (1:springer, 2:summer, 3:fall, 4:winter)
+- holiday : weather day is holiday or not (extracted from http://dchr.dc.gov/page/holiday-schedule)
+- workingday : if day is neither weekend nor holiday is 1, otherwise is 0.
++ weathersit : 
+    - 1: Clear, Few clouds, Partly cloudy, Partly cloudy
+	- 2: Mist + Cloudy, Mist + Broken clouds, Mist + Few clouds, Mist
+	- 3: Light Snow, Light Rain + Thunderstorm + Scattered clouds, Light Rain + Scattered clouds
+	- 4: Heavy Rain + Ice Pallets + Thunderstorm + Mist, Snow + Fog
+- temp : Normalized temperature in Celsius. The values are divided to 41 (max)
+- atemp: Normalized feeling temperature in Celsius. The values are divided to 50 (max)
+- hum: Normalized humidity. The values are divided to 100 (max)
+- windspeed: Normalized wind speed. The values are divided to 67 (max)
+- casual: count of casual users
+- registered: count of registered users
+- cnt: count of total rental bikes including both casual and registered (target)
+
+
+#2. Data Handling
+##2-1. Time & weather variable
+```{r}
+featureExtract <- function(data){
+    data <- data%>%
+        mutate(Year = as.factor(year(datetime)), Month = as.factor(month(datetime)), 
+               Hour = as.factor(hour(datetime)), Wday = wday(datetime, label = T)) %>%
+        mutate(spring = ifelse(season == 1, 1, 0),
+               summer = ifelse(season == 2, 1, 0),
+               fall = ifelse(season == 3, 1,0),
+               winter = ifelse(season == 4, 1, 0)) %>%
+        mutate(weatherGreat = ifelse(weathersit == 1, 1, 0),
+               weatherNice = ifelse(weathersit == 2, 1, 0),
+               weatherBad = ifelse(weathersit == 3, 1,0),
+               weatherWorst = ifelse(weathersit == 4, 1, 0))
+}
+train <- featureExtract(train)
+test <- featureExtract(test)
+str(train)
+```
+
+
+##2-2. other variable
+```{r}
+ #workingday as factor
+ train$workingday <- as.factor(train$workingday)
+ test$workingday <- as.factor(test$workingday)
+ #holiday as factor
+ train$holiday <- as.factor(train$holiday)
+ test$holiday <- as.factor(test$holiday)
+ #weathersit as dummy
+ train$weathersit <- as.factor(train$weathersit)
+ test$weathersit <- as.factor(test$weathersit)
+ #season as dummy
+ train$season <- as.factor(train$season)
+ test$season<- as.factor(test$season)
+```
+
+
+##2-3. int variable
+lasso & ridge는 다중공선성이 존재하는 변수를 죽여 상호작용항을 추가하기 어렵기에
+아래와 같이 임의적으로 상호작용항을 만들어 주어야 함 
+```{r}
+#Peak variable [workingday * Hour]
+makePeak <- function(data){
+ data <- data %>%
+     mutate(Weekend = ifelse(workingday == 0 & holiday == 0, 1, 0))%>%
+     mutate(Hour = as.numeric(Hour)) %>%
+     mutate(peak = ifelse((workingday == 1 & (Hour == 8 | (Hour >= 17 & Hour <= 18)))
+         | ((workingday == 0 & (Hour >= 10 & Hour <= 19))), 1, 0)) %>%
+     mutate(Hour = as.factor(Hour))
+     }
+train <- makePeak(train)
+test <- makePeak(test)
+```
+
+
+##2-4. *log at target value*
+```{r}
+train$casual_log <- log(train$casual + 1) 
+train$registered_log <- log(train$registered + 1) 
+head(train)
+str(train)
+```
+
+
+
+#3.Visualize relations btwn variable 
+##1) 요일별, casual과 register 비교 
+```{r}
+  train %>%
+     group_by(Wday) %>%
+     summarise(casual = sum(casual), registered = sum(registered)) %>%
+     # wide form으로 요일별, casual과 register정리 
+     melt(id.vars = "Wday", variable.name = "type", value.name = "rent") %>%
+     # 이를 longform으로 전환 for visualize
+     mutate(Wday = ordered(Wday,
+         levels = c("Mon","Tues","Wed","Thurs","Fri","Sat","Sun")))%>%
+     ggplot(aes(x = Wday, y = rent, fill = type)) +
+     geom_col(position = "dodge")
+#casual은 주말 사용이 높으나,registered는 평일 사용 비율이 높음 확인
+```
+```{r}
+#시간  & 온도에 따른 registered 
+time_label <- paste0(sprintf("%02d", 0:23), ":00 ", rep(c("AM", "PM"), each = 12))
+gradient <- c("#1e139b", "#74c5a4", "#efea91", "#f6854d", "#9f0440")
+
+train %>%
+    filter(workingday == 1) %>%
+    mutate(n.cnt = registered/(max(registered))) %>% 
+    # registerd값을 0~1사이의 비율로 보여주기 위해
+    ggplot(aes(x = as.numeric(Hour), y = n.cnt, color = hum)) +
+    geom_point(position = "jitter", size = 1, alpha = .7) +
+    geom_jitter(width = .5, size = 1, alpha = .7) + 
+    scale_color_gradientn(colors = gradient, name = "Humidity\n") +
+    scale_x_continuous(breaks=c(0:23), label = time_label) + 
+    theme(axis.text.x = element_text(angle = 80, face = "italic" , vjust = 0.5),
+          axis.text.y = element_text(face = "italic"), legend.position = "bottom", legend.title = element_text(size = 9, face = 'bold.italic')) +
+    xlab("Hour") + ylab("Count")
+
+```
+
+
+##2) cnt 
+```{r}
+ #년도별&월별&날씨별, cnt 비교 
+  train %>%
+     group_by(Year, Month, weathersit) %>%
+     summarise(Count = sum(cnt)) %>%  
+     ggplot(aes(x = factor(Month), y = Count, fill = factor(weathersit))) + 
+     geom_bar(stat = "identity", position = "dodge") +
+     xlab("Month") + scale_fill_discrete(name = "Weather Condition") +
+     facet_grid(Year~.)
+
+
+ #년도별&계절별&날씨별, cnt 비교 
+ train %>%
+     group_by(Year, season, weathersit) %>%
+     summarise(Count = sum(cnt)) %>%
+     ggplot(aes(x = factor(season), y = Count, fill = factor(weathersit))) + 
+     geom_bar(stat = "identity", position = "dodge") +
+     xlab("Season") + scale_fill_discrete(name = "Weather Condition") +
+     scale_x_discrete(breaks=1:4, label = c("Spring", "Summer", "Fall", "Winter")) +
+     facet_grid(Year~.)
+ 
+ # 계절 & 월별 
+ table(train$season, train$Month)
+ cor(as.numeric(train$season),as.numeric(train$Month)) # [1] 0.9715238
+```
+연도별, 날씨별 cnt에 대한  유의미한 차이가 있기에 범주형 변수로 전환
+계절과 월별 변수는 높은 상관관계에 있기에 둘중 하나만 사용
+
+##3) registered & casual
+```{r}
+ #~Hour
+ train%>%
+    group_by(Hour) %>%
+    summarise(registered = sum(registered), casual= sum(casual), cnt = sum(cnt)) %>%
+    melt(id.var = "Hour", variable.name = "type", value.name = "rent") %>% 
+    ggplot(aes(x = Hour, y = rent , fill = type))+
+    geom_bar(stat= "identity", position = "dodge" ) +
+    facet_grid(type~.,scales = "fixed")
+    
+ #~wday
+ train%>%
+    group_by(Wday) %>%
+    summarise(registered =sum(registered), casual= sum(casual), cnt = sum(cnt)) %>%
+    melt(id.var = "Wday", variable.name = "type", value.name = "rent") %>% 
+    ggplot(aes(x = Wday, y = rent , fill = type))+
+    geom_bar(stat= "identity", position = "dodge" ) +
+    facet_grid(type~.,scales = "fixed")
+    
+ #~year 
+    train%>%
+    group_by(Year) %>%
+    summarise(registered =sum(registered), casual= sum(casual), cnt = sum(cnt)) %>%
+    melt(id.var = "Year", variable.name = "type", value.name = "rent") %>% 
+    ggplot(aes(x = Year, y = rent , fill = type))+
+    geom_bar(stat= "identity", position = "dodge" ) +
+    facet_grid(type~., scales = "fixed" ) +
+    theme(legend.position = 'bottom')
+```
+
+##4) cor_table
+```{r}
+str(train)
+table(train$season)
+cor_table <- data.frame(
+     x1 = as.numeric(train$season),
+     x2 = as.numeric(train$weathersit),
+     x3 = train$temp,
+     x4 = train$atemp,
+     x5 = train$hum,
+     x6 = train$windspeed,
+     x7 = train$cnt,
+     x8 = as.numeric(train$Month)
+     )
+ cor(cor_table)
+ cor_circle <- abs(cor(cor_table))
+ corrplot(cor_circle, method = "circle")
+
+  
+```
+```{r}
+# weathersit & hum [상호작용 추청]
+ train %>%
+     ggplot( aes(x = weathersit, y =  hum ))+
+     geom_boxplot( alpha =0.3,fill ="lightblue") +  
+     theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ 
+ #season & temp [상호작용 추청]
+ train %>%
+     ggplot( aes(x = season, y =  temp ))+
+     geom_boxplot( alpha =0.3,fill =" royalblue") +  
+     theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+Month & Season => month is better
+temp & atemp =>temp is better
+*but, lasso와 ridge모형에 있어서, 다중공선성 문제는  shrinkage에 의해 해결됨*
+
+
+
+#4. Linear Rregression
+```{r}
+names(train)
+cnt_lm_1 <- lm(registered_log ~ season + holiday + workingday + weathersit 
+     + temp + hum + windspeed + Year + Month + Hour + Wday + spring + summer + fall + winter + weatherGreat + weatherNice + weatherBad + weatherWorst, data = train)
+ summary(cnt_lm_1)
+ cnt_lm_pred_1 <- predict(cnt_lm_1, test)
+ summary(cnt_lm_pred_1)
+```
+warning : prediction from a rank-deficient fit may be misleading
+회귀계수를 구하는데 있어서 xT * x의 역행렬이 존재하지 않음에 따라 발생하는 경고
+이는 회귀계수의 값 자체를 구할 수 없음을 의미. 
+
+
+
+#5. Ridge Regression
+##1) Make Matrix
+: glmnet함수가 matrix밖에 인식하지 못함
+*이때 종속변수에 있어서, registered_log와 casual_log을 구분*
+
+##(1)독립변수
+```{r}
+#train
+str(train)
+set.seed(1)
+x_registered <- model.matrix(registered_log ~ season + holiday + workingday + weathersit + temp + hum + windspeed + Year + Month + Hour + Wday + spring + summer + fall + winter + weatherGreat + weatherNice + weatherBad + weatherWorst, data = train  )[, -1] # 첫번째 인터셉터 항을 제거해 주기 위해 1열 삭제 
+head(x_registered)
+
+x_casual <- model.matrix(casual_log ~ season + holiday + workingday + weathersit + temp + hum + windspeed + Year + Month + Hour + Wday + spring + summer + fall + winter + weatherGreat + weatherNice + weatherBad + weatherWorst, data = train  )[, -1]
+head(x_casual)
+
+#test
+x_registered_test <- model.matrix( ~ season + holiday + workingday + weathersit  + temp + hum + windspeed + Year + Month + Hour + Wday + spring + summer + fall + winter + weatherGreat + weatherNice + weatherBad + weatherWorst, data = test  )[, -1]
+head(x_registered_test)
+
+x_casual_test <- model.matrix( ~ season + holiday + workingday + weathersit  + temp + hum + windspeed + Year + Month + Hour + Wday + spring + summer + fall + winter + weatherGreat + weatherNice + weatherBad + weatherWorst, data = test  )[, -1]
+head(x_casual_test)
+```
+
+##(2)종속변수
+```{r}
+ y_cnt <- train$cnt
+ head(y_cnt)
+ 
+ y_registered <- train$registered_log
+ head(y_registered)
+ 
+ y_casual <- train$casual_log
+ head(y_casual)
+```
+
+
+##2) make Model
+###(1)finding optimum lambda 
+```{r}
+#install.packages('doParallel')
+library(doParallel)  #병렬계산을 위한 패키지
+registerDoParallel(cores = 2)# 람다 계산 400번 해야되기에, 듀얼(혹은 쿼드로 병렬 계산)
+
+#cv.glmnet 옵션 
+standard = TRUE
+isLASSO = 1
+family = 'gaussian' # what is it?
+nfolds = 10  
+```
+
+```{r}
+#registered
+#(1)임의의 파라미터 람다 지정
+lambda <- exp(seq(-7, -9, length.out = 400))
+#(2) lambda 찾기
+register_ridge.cv <- cv.glmnet(x = x_registered, y = y_registered, alpha = 0 , nfolds = 10, lambda = lambda,  standardize = TRUE, family = family, parallel =TRUE  )
+register_ridge.cv$lambda.min # 에러를 최소화 하는  lambda값 [1] 0.0002850325
+register_ridge.cv$lambda # min lambda의 위치를 확인하고 (1)람다의 범위 재지정
+                         # untill 가장 작은 람다값을 찾을 때 까지 
+cat("Cross Validaiton was completed.\n")
+cat("Appropriate value of lambda :", register_ridge.cv$lambda.min, "\n")
+```
+```{r}
+#casual
+#(1)임의의 파라미터 람다 지정
+lambda <- exp(seq(-6, -8, length.out = 400))
+#(2) lambda 찾기
+casual_ridge.cv <- cv.glmnet(x = x_casual, y = y_casual, alpha = 0 , nfolds = 10, lambda = lambda,  standardize = TRUE, family = family, parallel = TRUE)
+casual_ridge.cv$lambda.min # 에러를 최소화 하는  lambda값 [1]  0.0006835433
+casual_ridge.cv$lambda # min lambda의 위치를 확인하고 (1)람다의 범위 재지정
+                       # untill 가장 작은 람다값을 찾을 때 까지 
+cat("Cross Validaiton was completed.\n")
+cat("Appropriate value of lambda :", casual_ridge.cv$lambda.min, "\n")
+```
+
+
+###(2)Make model using minimum lambda
+```{r}
+#registered
+registered_ridge <- glmnet(x = x_registered , y = y_registered , alpha = 0, lambda = register_ridge.cv$lambda.min)
+coef(registered_ridge) # 각 변수별 beta값을 확인
+registered_ridge
+```
+```{r}
+#casual
+casual_ridge <- glmnet(x = x_casual , y = y_casual , alpha = 0, lambda = casual_ridge.cv$lambda.min)
+coef(casual_ridge) # 각 변수별 beta값을 확인
+casual_ridge
+```
+
+
+##3) predict target
+:test data도 matrix로 변환 [newx]에 기입
+```{r}
+#registered
+registered_ridge_pred <- predict(registered_ridge, newx = x_registered_test) 
+head(registered_ridge_pred)
+#casual 
+casual_ridge_pred <- predict(casual_ridge, newx = x_casual_test) 
+head(casual_ridge_pred)
+```
+
+
+##4) convert target value to origin scale
+: log-1값에 ex+1를 취해주고, 음수 값을 0으로 전환
+: error가 있는 값들은 조기에 수정해 주는 것이 좋음
+```{r}
+#registered
+registered_ridge_pred <- exp(registered_ridge_pred)-1
+registered_ridge_pred[registered_ridge_pred < 0] <- 0
+head(registered_ridge_pred)
+#casual
+casual_ridge_pred <- exp(casual_ridge_pred)-1
+casual_ridge_pred[casual_ridge_pred < 0] <- 0
+
+head(casual_ridge_pred)
+str(casual_ridge_pred)
+summary(casual_ridge_pred)   
+```
+
+
+##5) make cnt value
+```{r}
+cnt_ridge_pred <- registered_ridge_pred + casual_ridge_pred
+head(cnt_ridge_pred)
+```
+
+##6) Visualize the result 
+```{r}
+test%>%
+    mutate(casual = as.numeric(casual_ridge_pred)) %>%
+    mutate(registered = as.numeric(registered_ridge_pred)) %>%
+    group_by(Wday) %>%
+    summarise(casual = mean(casual), registered = mean(registered)) %>%
+    melt(id.vars = "Wday", variable.name = "type", value.name = "value") %>%
+    ggplot(aes(x = Wday , y = value, fill = type)) +
+    geom_col( position = "dodge") +
+    xlab(label = "WeekDay") + ylab(label = "Average")
+```
+
+
+##7) submission
+```{r}
+submission <- data.frame(id = 1:length(cnt_ridge_pred),
+     Cnt = cnt_ridge_pred)
+ write.csv(submission,"C:/Users/LG/Desktop/result_ridge_1.csv" , row.names= F)
+ Result_Ridge  <- 0.61216  # result_cnt_ridge_pred 's RMSLE: 0.61216
+```
+
+
+#6. lasso Regression
+##1) make Model
+###(1)finding optimum lambda 
+```{r}
+library(doParallel)  #병렬계산을 위한 패키지
+registerDoParallel(cores = 2)# 람다 계산 400번 해야되기에, 듀얼(혹은 쿼드로 병렬 계산)
+
+#cv.glmnet 옵션 
+standard = TRUE
+isLASSO = 1
+family = 'gaussian' # what is it?
+nfolds = 10 
+```
+
+```{r}
+#registered
+#(1)임의의 파라미터 람다 지정
+set.seed(1)
+lambda <- exp(seq(-7, -9, length.out = 400))
+#(2) lambda 찾기
+register_lasso.cv <- cv.glmnet(x = x_registered, y = y_registered, alpha = 1 , nfolds = 10, lambda = lambda,  standardize = TRUE, family = family, parallel =TRUE  )
+register_lasso.cv$lambda.min # 에러를 최소화 하는  lambda값 [1] 0.0001271778
+register_lasso.cv$lambda # min lambda의 위치를 확인하고 (1)람다의 범위 재지정
+                         # untill 가장 작은 람다값을 찾을 때 까지 
+cat("Cross Validaiton was completed.\n")
+cat("Appropriate value of lambda :", register_lasso.cv$lambda.min, "\n")
+```
+
+###(2)Make model using minimum lambda
+```{r}
+#registered
+registered_lasso <- glmnet(x = x_registered , y = y_registered , alpha = 1, lambda = register_ridge.cv$lambda.min)
+coef(registered_ridge) # 각 변수별 beta값을 확인
+registered_ridge
+```
+```{r}
+#casual
+casual_lasso <- glmnet(x = x_casual , y = y_casual , alpha = 1, lambda = casual_ridge.cv$lambda.min)
+coef(casual_ridge) # 각 변수별 beta값을 확인
+casual_ridge
+```
+
+
+##3) predict target
+:test data도 matrix로 변환 [newx]에 기입
+```{r}
+#registered
+registered_lasso_pred <- predict(registered_lasso, newx = x_registered_test) 
+head(registered_lasso_pred)
+#casual 
+casual_lasso_pred <- predict(casual_lasso, newx = x_casual_test) 
+head(casual_lasso_pred)
+```
+
+
+##4) convert target value to origin scale
+: log-1값에 ex+1를 취해주고, 음수 값을 0으로 전환
+: error가 있는 값들은 조기에 수정해 주는 것이 좋음
+```{r}
+#registered
+registered_lasso_pred <- exp(registered_lasso_pred)-1
+registered_lasso_pred[registered_lasso_pred < 0] <- 0
+head(registered_lasso_pred)
+#casual
+casual_lasso_pred <- exp(casual_lasso_pred)-1
+casual_lasso_pred[casual_lasso_pred < 0] <- 0
+
+head(casual_lasso_pred)
+str(casual_lasso_pred)
+summary(casual_lasso_pred)   
+```
+
+##5) make cnt value
+```{r}
+cnt_lasso_pred <- registered_lasso_pred + casual_lasso_pred
+head(cnt_lasso_pred)
+```
+
+
+##6) Visualize the result 
+```{r}
+test%>%
+    mutate(casual = as.numeric(casual_lasso_pred)) %>%
+    mutate(registered = as.numeric(registered_lasso_pred)) %>%
+    group_by(Wday) %>%
+    summarise(casual = mean(casual), registered = mean(registered)) %>%
+    melt(id.vars = "Wday", variable.name = "type", value.name = "value") %>%
+    ggplot(aes(x = Wday , y = value, fill = type)) +
+    geom_col( position = "dodge") +
+    xlab(label = "WeekDay") + ylab(label = "Average")
+```
+
+##7) submission
+```{r}
+submission <- data.frame(id = 1:length(cnt_lasso_pred),
+     Cnt = cnt_lasso_pred)
+
+submission <- cbind(submission, test$datetime)
+colnames(submission)[c(2,3)] <- c('count','datetime')
+submission %>%
+    dplyr::select(c('datetime', 'count')) -> submission
+
+write.csv(submission,"C:/Users/TaeHwan/Desktop/0. R/1. ML/1) R_studio_note/result_lasso_1.csv" , row.names= F)
+# Result_lasso  <- 0.60367  # result_cnt_lasso_pred 's RMSLE: 0.60367
+```
+
+
+```{r}
+head(submission)
+```
+
