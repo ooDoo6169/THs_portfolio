@@ -1,4 +1,4 @@
-# Tae Hwan Youn's R & python Protfolio
+# Tae Hwan Youn's R & Python Protfolio
 <center>data science for sustainable society</center>
 
 # 1. Machine Learning_R
