@@ -11,7 +11,7 @@
 ### (2) main Alogoritms
  - Ridge & Lasso
   : 잔차 제곱항에 정규화항(페널티항)을 추가한 기법으로 페널티항이 커질수록 불필요한 변수를 수축하여 모델을 단순화 시키는 기법
-<center><img src="https://github.com/ooDoo6169/portfolio/blob/master/img_src/ridge_lasso.png?raw=true" width="400px" /></center>
+<center><img src="https://github.com/ooDoo6169/TaeHwan_portfolio.github.io/blob/master/img_src/ridge_lasso.png?raw=true" width="400px" /></center>
 
 ### (3) Analysis Result
-<center><img src="https://github.com/ooDoo6169/portfolio/blob/master/img_src/ML_BSD_result.png?raw=true" width="400px" /></center>
+<center><img src="https://github.com/ooDoo6169/TaeHwan_portfolio.github.io/blob/master/img_src/ML_BSD_result.png?raw=true" width="400px" /></center>
